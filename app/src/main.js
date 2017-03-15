@@ -1,20 +1,30 @@
 import 'source-map-support/register';
 import fs from 'fs';
 import path from 'path';
-import electron from 'electron';
+import {app, crashReporter} from 'electron';
 import createLoginWindow from './components/login/loginWindow';
 import createMainWindow from './components/mainWindow/mainWindow';
 import helpers from './helpers/helpers';
+import inferFlash from './helpers/inferFlash';
+import electronDownload from 'electron-dl';
 
-const {app, ipcMain} = electron;
 const {isOSX} = helpers;
+
+electronDownload();
 
 const APP_ARGS_FILE_PATH = path.join(__dirname, '..', 'nativefier.json');
 const appArgs = JSON.parse(fs.readFileSync(APP_ARGS_FILE_PATH, 'utf8'));
 
 let mainWindow;
 
-if (appArgs.insecure) {
+if (typeof appArgs.flashPluginDir === 'string') {
+    app.commandLine.appendSwitch('ppapi-flash-path', appArgs.flashPluginDir);
+} else if (appArgs.flashPluginDir) {
+    const flashPath = inferFlash();
+    app.commandLine.appendSwitch('ppapi-flash-path', flashPath);
+}
+
+if (appArgs.ignoreCertificate) {
     app.commandLine.appendSwitch('ignore-certificate-errors');
 }
 
@@ -26,7 +36,7 @@ if (isOSX()) {
 }
 
 app.on('window-all-closed', () => {
-    if (!isOSX()) {
+    if (!isOSX() || appArgs.fastQuit) {
         app.quit();
     }
 });
@@ -52,6 +62,16 @@ app.on('before-quit', () => {
     }
 });
 
+if (appArgs.crashReporter) {
+    app.on('will-finish-launching', () => {
+        crashReporter.start({
+            productName: appArgs.name,
+            submitURL: appArgs.crashReporter,
+            autoSubmit: true
+        });
+    });
+}
+
 app.on('ready', () => {
     mainWindow = createMainWindow(appArgs, app.quit, setDockBadge);
 });
@@ -60,11 +80,4 @@ app.on('login', (event, webContents, request, authInfo, callback) => {
     // for http authentication
     event.preventDefault();
     createLoginWindow(callback);
-});
-
-ipcMain.on('notification', (event, title, opts) => {
-    if (!isOSX() || mainWindow.isFocused()) {
-        return;
-    }
-    setDockBadge('●');
 });

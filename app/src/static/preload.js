@@ -1,19 +1,28 @@
 /**
  Preload file that will be executed in the renderer process
  */
-import electron from 'electron';
-const {ipcRenderer, webFrame} = electron;
+import {ipcRenderer, webFrame} from 'electron';
+import path from 'path';
+import fs from 'fs';
+
+const INJECT_JS_PATH = path.join(__dirname, '../../', 'inject/inject.js');
 
 setNotificationCallback((title, opt) => {
     ipcRenderer.send('notification', title, opt);
 });
 
-document.addEventListener('DOMContentLoaded', event => {
+document.addEventListener('DOMContentLoaded', () => {
     // do things
 
     window.addEventListener('contextmenu', event => {
         event.preventDefault();
-        const targetElement = event.srcElement;
+        let targetElement = event.srcElement;
+
+        // the clicked element is the deepest in the DOM, and may not be the <a> bearing the href
+        // for example, <a href="..."><span>Google</span></a>
+        while (!targetElement.href && targetElement.parentElement) {
+            targetElement = targetElement.parentElement;
+        }
         const targetHref = targetElement.href;
 
         if (!targetHref) {
@@ -26,11 +35,16 @@ document.addEventListener('DOMContentLoaded', event => {
         ipcRenderer.send('contextMenuOpened', targetHref);
     }, false);
 
+    injectScripts();
 });
 
 ipcRenderer.on('params', (event, message) => {
     const appArgs = JSON.parse(message);
     console.log('nativefier.json', appArgs);
+});
+
+ipcRenderer.on('debug', (event, message) => {
+    console.log('debug:', message);
 });
 
 ipcRenderer.on('change-zoom', (event, message) => {
@@ -61,4 +75,12 @@ function setNotificationCallback(callback) {
 function clickSelector(element) {
     const mouseEvent = new MouseEvent('click');
     element.dispatchEvent(mouseEvent);
+}
+
+function injectScripts() {
+    const needToInject = fs.existsSync(INJECT_JS_PATH);
+    if (!needToInject) {
+        return;
+    }
+    require(INJECT_JS_PATH);
 }

@@ -1,12 +1,12 @@
+import fs from 'fs';
 import path from 'path';
-import electron from 'electron';
+import {BrowserWindow, shell, ipcMain, dialog} from 'electron';
 import windowStateKeeper from 'electron-window-state';
 import helpers from './../../helpers/helpers';
 import createMenu from './../menu/menu';
 import initContextMenu from './../contextMenu/contextMenu';
 
-const {BrowserWindow, shell, ipcMain} = electron;
-const {isOSX, linkIsInternal} = helpers;
+const {isOSX, linkIsInternal, getCssToInject, shouldInjectCss} = helpers;
 
 const ZOOM_INTERVAL = 0.1;
 
@@ -24,23 +24,47 @@ function createMainWindow(options, onAppQuit, setDockBadge) {
     });
 
     const mainWindow = new BrowserWindow({
+        frame: !options.hideWindowFrame,
         width: mainWindowState.width,
         height: mainWindowState.height,
+        minWidth: options.minWidth,
+        minHeight: options.minHeight,
+        maxWidth: options.maxWidth,
+        maxHeight: options.maxHeight,
         x: mainWindowState.x,
         y: mainWindowState.y,
-        'auto-hide-menu-bar': !options.showMenuBar,
+        autoHideMenuBar: !options.showMenuBar,
         // Convert dashes to spaces because on linux the app name is joined with dashes
         title: options.name,
-        'web-preferences': {
+        webPreferences: {
             javascript: true,
             plugins: true,
             // node globals causes problems with sites like messenger.com
             nodeIntegration: false,
-            preload: path.join(__dirname, 'static', 'preload.js')
+            webSecurity: !options.insecure,
+            preload: path.join(__dirname, 'static', 'preload.js'),
+            zoomFactor: options.zoom
         },
         // after webpack path here should reference `resources/app/`
-        icon: path.join(__dirname, '../', '/icon.png')
+        icon: path.join(__dirname, '../', '/icon.png'),
+        // set to undefined and not false because explicitly setting to false will disable full screen
+        fullscreen: options.fullScreen || undefined
     });
+
+    mainWindowState.manage(mainWindow);
+
+    // after first run, no longer force full screen to be true
+    if (options.fullScreen) {
+        options.fullScreen = undefined;
+        fs.writeFileSync(path.join(__dirname, '..', 'nativefier.json'), JSON.stringify(options));
+    }
+
+    // after first run, no longer force maximize to be true
+    if (options.maximize) {
+        mainWindow.maximize();
+        options.maximize = undefined;
+        fs.writeFileSync(path.join(__dirname, '..', 'nativefier.json'), JSON.stringify(options));
+    }
 
     let currentZoom = 1;
 
@@ -54,32 +78,82 @@ function createMainWindow(options, onAppQuit, setDockBadge) {
         mainWindow.webContents.send('change-zoom', currentZoom);
     };
 
-    createMenu(options.nativefierVersion, onAppQuit, mainWindow.webContents.goBack, mainWindow.webContents.goForward, onZoomIn, onZoomOut, mainWindow.webContents.getURL);
-    initContextMenu(mainWindow);
+    const clearAppData = () => {
+        dialog.showMessageBox(mainWindow, {
+            type: 'warning',
+            buttons: ['Yes', 'Cancel'],
+            defaultId: 1,
+            title: 'Clear cache confirmation',
+            message: 'This will clear all data (cookies, local storage etc) from this app. Are you sure you wish to proceed?'
+        }, response => {
+            if (response === 0) {
+                const session = mainWindow.webContents.session;
+                session.clearStorageData(() => {
+                    session.clearCache(() => {
+                        mainWindow.loadURL(options.targetUrl);
+                    });
+                });
+            }
+        });
+    };
+
+    const onGoBack = () => {
+        mainWindow.webContents.goBack();
+    };
+
+    const onGoForward = () => {
+        mainWindow.webContents.goForward();
+    };
+
+    const getCurrentUrl = () => {
+        return mainWindow.webContents.getURL();
+    };
+
+    const menuOptions = {
+        nativefierVersion: options.nativefierVersion,
+        appQuit: onAppQuit,
+        zoomIn: onZoomIn,
+        zoomOut: onZoomOut,
+        goBack: onGoBack,
+        goForward: onGoForward,
+        getCurrentUrl: getCurrentUrl,
+        clearAppData: clearAppData,
+        disableDevTools: options.disableDevTools
+    };
+
+    createMenu(menuOptions);
+    if (!options.disableContextMenu) {
+        initContextMenu(mainWindow);
+    }
 
     if (options.userAgent) {
         mainWindow.webContents.setUserAgent(options.userAgent);
     }
 
+    maybeInjectCss(mainWindow);
     mainWindow.webContents.on('did-finish-load', () => {
         mainWindow.webContents.send('params', JSON.stringify(options));
     });
 
     if (options.counter) {
-        mainWindow.on('page-title-updated', () => {
-            if (mainWindow.isFocused()) {
+        mainWindow.on('page-title-updated', (e, title) => {
+            const itemCountRegex = /[\(\[{](\d*?)[}\]\)]/;
+            const match = itemCountRegex.exec(title);
+            if (match) {
+                setDockBadge(match[1]);
+            } else {
+                setDockBadge('');
+            }
+        });
+    } else {
+        ipcMain.on('notification', () => {
+            if (!isOSX() || mainWindow.isFocused()) {
                 return;
             }
-
-            if (options.counter) {
-                const itemCountRegex = /[\(\[{](\d*?)[}\]\)]/;
-                const match = itemCountRegex.exec(mainWindow.getTitle());
-                if (match) {
-                    setDockBadge(match[1]);
-                }
-                return;
-            }
-            setDockBadge('●');
+            setDockBadge('•');
+        });
+        mainWindow.on('focus', () => {
+            setDockBadge('');
         });
     }
 
@@ -89,7 +163,7 @@ function createMainWindow(options, onAppQuit, setDockBadge) {
             return;
         }
 
-        if (linkIsInternal(options.targetUrl, urlToGo)) {
+        if (linkIsInternal(options.targetUrl, urlToGo, options.internalUrls)) {
             return;
         }
         event.preventDefault();
@@ -98,19 +172,14 @@ function createMainWindow(options, onAppQuit, setDockBadge) {
 
     mainWindow.loadURL(options.targetUrl);
 
-    mainWindow.on('focus', () => {
-        setDockBadge('');
-    });
-
     mainWindow.on('close', event => {
         if (mainWindow.isFullScreen()) {
             mainWindow.setFullScreen(false);
-            mainWindow.once('leave-full-screen', maybeHideWindow.bind(this, mainWindow, event));
+            mainWindow.once('leave-full-screen', maybeHideWindow.bind(this, mainWindow, event, options.fastQuit));
         }
-        maybeHideWindow(mainWindow, event);
+        maybeHideWindow(mainWindow, event, options.fastQuit);
     });
 
-    mainWindowState.manage(mainWindow);
     return mainWindow;
 }
 
@@ -121,13 +190,37 @@ ipcMain.on('cancelNewWindowOverride', () => {
     });
 });
 
-function maybeHideWindow(window, event) {
-    if (isOSX()) {
+function maybeHideWindow(window, event, fastQuit) {
+    if (isOSX() && !fastQuit) {
         // this is called when exiting from clicking the cross button on the window
         event.preventDefault();
         window.hide();
     }
     // will close the window on other platforms
+}
+
+function maybeInjectCss(browserWindow) {
+    if (!shouldInjectCss()) {
+        return;
+    }
+
+    const cssToInject = getCssToInject();
+
+    const injectCss = () => {
+        browserWindow.webContents.insertCSS(cssToInject);
+    };
+
+    browserWindow.webContents.on('did-finish-load', () => {
+        // remove the injection of css the moment the page is loaded
+        browserWindow.webContents.removeListener('did-get-response-details', injectCss);
+    });
+
+    // on every page navigation inject the css
+    browserWindow.webContents.on('did-navigate', () => {
+        // we have to inject the css in did-get-response-details to prevent the fouc
+        // will run multiple times
+        browserWindow.webContents.on('did-get-response-details', injectCss);
+    });
 }
 
 export default createMainWindow;

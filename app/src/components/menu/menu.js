@@ -1,16 +1,17 @@
 import {Menu, shell, clipboard} from 'electron';
 
 /**
- *
- * @param {string} nativefierVersion
- * @param {function} onQuit should be from app.quit
- * @param {function} onGoBack
- * @param {electron} onGoForward
- * @param {function} onZoomIn
- * @param {function} onZoomOut
- * @param {function} getUrl
+ * @param nativefierVersion
+ * @param appQuit
+ * @param zoomIn
+ * @param zoomOut
+ * @param goBack
+ * @param goForward
+ * @param getCurrentUrl
+ * @param clearAppData
+ * @param disableDevTools
  */
-function createMenu(nativefierVersion, onQuit, onGoBack, onGoForward, onZoomIn, onZoomOut, getUrl) {
+function createMenu({nativefierVersion, appQuit, zoomIn, zoomOut, goBack, goForward, getCurrentUrl, clearAppData, disableDevTools}) {
     if (Menu.getApplicationMenu()) {
         return;
     }
@@ -44,9 +45,9 @@ function createMenu(nativefierVersion, onQuit, onGoBack, onGoForward, onZoomIn, 
                 },
                 {
                     label: 'Copy Current URL',
-                    accelerator: 'CmdOrCtrl+C',
+                    accelerator: 'CmdOrCtrl+L',
                     click: () => {
-                        const currentURL = getUrl();
+                        const currentURL = getCurrentUrl();
                         clipboard.writeText(currentURL);
                     }
                 },
@@ -59,6 +60,12 @@ function createMenu(nativefierVersion, onQuit, onGoBack, onGoForward, onZoomIn, 
                     label: 'Select All',
                     accelerator: 'CmdOrCtrl+A',
                     role: 'selectall'
+                },
+                {
+                    label: 'Clear App Data',
+                    click: () => {
+                        clearAppData();
+                    }
                 }
             ]
         },
@@ -69,14 +76,14 @@ function createMenu(nativefierVersion, onQuit, onGoBack, onGoForward, onZoomIn, 
                     label: 'Back',
                     accelerator: 'CmdOrCtrl+[',
                     click: () => {
-                        onGoBack();
+                        goBack();
                     }
                 },
                 {
                     label: 'Forward',
                     accelerator: 'CmdOrCtrl+]',
                     click: () => {
-                        onGoForward();
+                        goForward();
                     }
                 },
                 {
@@ -114,7 +121,7 @@ function createMenu(nativefierVersion, onQuit, onGoBack, onGoForward, onZoomIn, 
                         return 'Ctrl+=';
                     })(),
                     click: () => {
-                        onZoomIn();
+                        zoomIn();
                     }
                 },
                 {
@@ -126,11 +133,11 @@ function createMenu(nativefierVersion, onQuit, onGoBack, onGoForward, onZoomIn, 
                         return 'Ctrl+-';
                     })(),
                     click: () => {
-                        onZoomOut();
+                        zoomOut();
                     }
                 },
                 {
-                    label: 'Toggle Window Developer Tools',
+                    label: 'Toggle Developer Tools',
                     accelerator: (() => {
                         if (process.platform === 'darwin') {
                             return 'Alt+Command+I';
@@ -181,6 +188,12 @@ function createMenu(nativefierVersion, onQuit, onGoBack, onGoForward, onZoomIn, 
         }
     ];
 
+    if (disableDevTools) {
+        // remove last item (dev tools) from menu > view
+        const submenu = template[1].submenu;
+        submenu.splice(submenu.length - 1, 1);
+    }
+
     if (process.platform === 'darwin') {
         template.unshift({
             label: 'Electron',
@@ -214,7 +227,7 @@ function createMenu(nativefierVersion, onQuit, onGoBack, onGoForward, onZoomIn, 
                     label: 'Quit',
                     accelerator: 'Command+Q',
                     click: () => {
-                        onQuit();
+                        appQuit();
                     }
                 }
             ]

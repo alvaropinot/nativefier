@@ -1,5 +1,4 @@
-import electron from 'electron';
-const {Menu, ipcMain, shell, BrowserWindow} = electron;
+import {Menu, ipcMain, shell, clipboard, BrowserWindow} from 'electron';
 
 function initContextMenu(mainWindow) {
     ipcMain.on('contextMenuOpened', (event, targetHref) => {
@@ -18,6 +17,18 @@ function initContextMenu(mainWindow) {
                 click: () => {
                     if (targetHref) {
                         new BrowserWindow().loadURL(targetHref);
+                        return;
+                    }
+
+                    mainWindow.useDefaultWindowBehaviour = true;
+                    mainWindow.webContents.send('contextMenuClosed');
+                }
+            },
+            {
+                label: 'Copy link location',
+                click: () => {
+                    if (targetHref) {
+                        clipboard.writeText(targetHref);
                         return;
                     }
 

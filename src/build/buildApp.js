@@ -24,22 +24,73 @@ function buildApp(src, dest, options, callback) {
         }
 
         fs.writeFileSync(path.join(dest, '/nativefier.json'), JSON.stringify(appArgs));
-        changeAppPackageJsonName(dest, appArgs.name);
-        callback();
+
+        maybeCopyScripts(options.inject, dest)
+            .catch(error => {
+                console.warn(error);
+            })
+            .then(() => {
+                changeAppPackageJsonName(dest, appArgs.name, appArgs.targetUrl);
+                callback();
+            });
     });
 }
 
-function changeAppPackageJsonName(appPath, name) {
+function maybeCopyScripts(srcs, dest) {
+    if (!srcs) {
+        return new Promise(resolve => {
+            resolve();
+        });
+    }
+    const promises = srcs.map(src => {
+        return new Promise((resolve, reject) => {
+            if (!fs.existsSync(src)) {
+                reject('Error copying injection files: file not found');
+                return;
+            }
+
+            let destFileName;
+            if (path.extname(src) === '.js') {
+                destFileName = 'inject.js';
+            } else if (path.extname(src) === '.css') {
+                destFileName = 'inject.css';
+            } else {
+                resolve();
+                return;
+            }
+
+            copy(src, path.join(dest, 'inject', destFileName), error => {
+                if (error) {
+                    reject(`Error Copying injection files: ${error}`);
+                    return;
+                }
+                resolve();
+            });
+        });
+    });
+
+    return new Promise((resolve, reject) => {
+        Promise.all(promises)
+            .then(() => {
+                resolve();
+            })
+            .catch(error => {
+                reject(error);
+            });
+    });
+}
+
+function changeAppPackageJsonName(appPath, name, url) {
     const packageJsonPath = path.join(appPath, '/package.json');
     const packageJson = JSON.parse(fs.readFileSync(packageJsonPath));
-    packageJson.name = normalizeAppName(name);
+    packageJson.name = normalizeAppName(name, url);
     fs.writeFileSync(packageJsonPath, JSON.stringify(packageJson));
 }
 
 /**
  * Only picks certain app args to pass to nativefier.json
  * @param options
- * @returns {{name: (*|string), targetUrl: (string|*), counter: *, width: *, height: *, showMenuBar: *, userAgent: *, nativefierVersion: *, insecure: *}}
+ * @returns {{name: (*|string), targetUrl: (string|*), counter: *, width: *, height: *, showMenuBar: *, userAgent: *, nativefierVersion: *, insecure: *, disableWebSecurity: *}}
  */
 function selectAppArgs(options) {
     return {
@@ -48,16 +99,33 @@ function selectAppArgs(options) {
         counter: options.counter,
         width: options.width,
         height: options.height,
+        minWidth: options.minWidth,
+        minHeight: options.minHeight,
+        maxWidth: options.maxWidth,
+        maxHeight: options.maxHeight,
         showMenuBar: options.showMenuBar,
+        fastQuit: options.fastQuit,
         userAgent: options.userAgent,
         nativefierVersion: options.nativefierVersion,
-        insecure: options.insecure
+        ignoreCertificate: options.ignoreCertificate,
+        insecure: options.insecure,
+        flashPluginDir: options.flashPluginDir,
+        fullScreen: options.fullScreen,
+        hideWindowFrame: options.hideWindowFrame,
+        maximize: options.maximize,
+        disableContextMenu: options.disableContextMenu,
+        disableDevTools: options.disableDevTools,
+        zoom: options.zoom,
+        internalUrls: options.internalUrls,
+        crashReporter: options.crashReporter
     };
 }
 
-function normalizeAppName(appName) {
+function normalizeAppName(appName, url) {
     // use a simple 3 byte random string to prevent collision
-    const postFixHash = crypto.randomBytes(3).toString('hex');
+    let hash = crypto.createHash('md5');
+    hash.update(url);
+    const postFixHash = hash.digest('hex').substring(0, 6);
     const normalized = _.kebabCase(appName.toLowerCase());
     return `${normalized}-nativefier-${postFixHash}`;
 }

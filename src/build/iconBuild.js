@@ -1,7 +1,10 @@
 import path from 'path';
+import log from 'loglevel';
 import helpers from './../helpers/helpers';
-import pngToIcns from './../helpers/pngToIcns';
-const isOSX = helpers.isOSX;
+import iconShellHelpers from './../helpers/iconShellHelpers';
+
+const {isOSX} = helpers;
+const {convertToPng, convertToIco, convertToIcns} = iconShellHelpers;
 
 /**
  * @callback augmentIconsCallback
@@ -27,13 +30,39 @@ function iconBuild(options, callback) {
         return;
     }
 
-    if (options.platform !== 'darwin') {
+    if (options.platform === 'win32') {
+        if (iconIsIco(options.icon)) {
+            returnCallback();
+            return;
+        }
+
+        convertToIco(options.icon)
+            .then(outPath => {
+                options.icon = outPath;
+                returnCallback();
+            })
+            .catch(error => {
+                log.warn('Skipping icon conversion to .ico', error);
+                returnCallback();
+            });
+        return;
+    }
+
+    if (options.platform === 'linux') {
         if (iconIsPng(options.icon)) {
             returnCallback();
-        } else {
-            console.warn('Icon should be a png for Linux and Windows apps');
-            returnCallback();
+            return;
         }
+
+        convertToPng(options.icon)
+            .then(outPath => {
+                options.icon = outPath;
+                returnCallback();
+            })
+            .catch(error => {
+                log.warn('Skipping icon conversion to .png', error);
+                returnCallback();
+            });
         return;
     }
 
@@ -42,23 +71,25 @@ function iconBuild(options, callback) {
         return;
     }
 
-    if (iconIsPng(options.icon)) {
-
-        if (!isOSX()) {
-            console.warn('Conversion of `.png` to `.icns` for OSX app is only supported on OSX');
-            returnCallback();
-            return;
-        }
-
-        pngToIcns(options.icon, (error, icnsPath) => {
-            options.icon = icnsPath;
-            if (error) {
-                console.warn('Skipping icon conversion from `.png` to `.icns`: ', error);
-            }
-            returnCallback();
-            return;
-        });
+    if (!isOSX()) {
+        log.warn('Skipping icon conversion to .icns, conversion is only supported on OSX');
+        returnCallback();
+        return;
     }
+
+    convertToIcns(options.icon)
+        .then(outPath => {
+            options.icon = outPath;
+            returnCallback();
+        })
+        .catch(error => {
+            log.warn('Skipping icon conversion to .icns', error);
+            returnCallback();
+        });
+}
+
+function iconIsIco(iconPath) {
+    return path.extname(iconPath) === '.ico';
 }
 
 function iconIsPng(iconPath) {

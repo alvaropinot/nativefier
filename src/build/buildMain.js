@@ -4,10 +4,12 @@ import tmp from 'tmp';
 import ncp from 'ncp';
 import async from 'async';
 import hasBinary from 'hasbin';
-
-import optionsFactory from './../options';
+import log from 'loglevel';
+import DishonestProgress from './../helpers/dishonestProgress';
+import optionsFactory from './../options/optionsMain';
 import iconBuild from './iconBuild';
 import helpers from './../helpers/helpers';
+import PackagerConsole from './../helpers/packagerConsole';
 import buildApp from './buildApp';
 
 const copy = ncp.ncp;
@@ -27,14 +29,21 @@ const isWindows = helpers.isWindows;
 function buildMain(options, callback) {
     // pre process app
 
-    var tmpObj = tmp.dirSync({unsafeCleanup: true});
+    const tmpObj = tmp.dirSync({unsafeCleanup: true});
     const tmpPath = tmpObj.name;
+
+    // todo check if this is still needed on later version of packager
+    const packagerConsole = new PackagerConsole();
+
+    const progress = new DishonestProgress(5);
 
     async.waterfall([
         callback => {
+            progress.tick('inferring');
             optionsFactory(options, callback);
         },
         (options, callback) => {
+            progress.tick('copying');
             buildApp(options.dir, tmpPath, options, error => {
                 if (error) {
                     callback(error);
@@ -46,19 +55,29 @@ function buildMain(options, callback) {
             });
         },
         (options, callback) => {
+            progress.tick('icons');
             iconBuild(options, (error, optionsWithIcon) => {
                 callback(null, optionsWithIcon);
             });
         },
         (options, callback) => {
+            progress.tick('packaging');
             // maybe skip passing icon parameter to electron packager
             const packageOptions = maybeNoIconOption(options);
+
+            packagerConsole.override();
+
             packager(packageOptions, (error, appPathArray) => {
+
+                // restore console.error
+                packagerConsole.restore();
+
                 // pass options which still contains the icon to waterfall
                 callback(error, options, appPathArray);
             });
         },
         (options, appPathArray, callback) => {
+            progress.tick('finalizing');
             // somehow appPathArray is a 1 element array
             const appPath = getAppPath(appPathArray);
             if (!appPath) {
@@ -70,7 +89,10 @@ function buildMain(options, callback) {
                 callback(error, appPath);
             });
         }
-    ], callback);
+    ], (error, appPath) => {
+        packagerConsole.playback();
+        callback(error, appPath);
+    });
 }
 
 /**
@@ -86,7 +108,7 @@ function getAppPath(appPathArray) {
     }
 
     if (appPathArray.length > 1) {
-        console.warn('Warning: This should not be happening, packaged app path contains more than one element:', appPathArray);
+        log.warn('Warning: This should not be happening, packaged app path contains more than one element:', appPathArray);
     }
 
     return appPathArray[0];
@@ -100,6 +122,7 @@ function maybeNoIconOption(options) {
     const packageOptions = JSON.parse(JSON.stringify(options));
     if (options.platform === 'win32' && !isWindows()) {
         if (!hasBinary.sync('wine')) {
+            log.warn('Wine is required to set the icon for a Windows app when packaging on non-windows platforms');
             packageOptions.icon = null;
         }
     }
@@ -125,8 +148,10 @@ function maybeCopyIcons(options, appPath, callback) {
     }
 
     // windows & linux
+    // put the icon file into the app
     const destIconPath = path.join(appPath, 'resources/app');
-    copy(options.icon, path.join(destIconPath, 'icon.png'), error => {
+    const destFileName = `icon${path.extname(options.icon)}`;
+    copy(options.icon, path.join(destIconPath, destFileName), error => {
         callback(error);
     });
 }
